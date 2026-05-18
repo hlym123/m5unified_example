@@ -1,11 +1,12 @@
 #include "M5Unified.h"
+#include <cstring>
 #include <esp_heap_caps.h>
 
-// BtnPWR: record 5 s mono, then play once (mic / speaker mutually exclusive).
-
-static constexpr uint32_t kSampleRate = 16000;
-static constexpr uint32_t kRecordSeconds = 5;
-static constexpr size_t kSampleCount = kSampleRate * kRecordSeconds;
+// BtnA: record 5 s mono, then play once (mic / speaker mutually exclusive).
+// 44100 Hz matches StickS3 / StopWatch internal speaker default in M5Unified.
+static constexpr uint32_t K_SAMPLE_RATE = 44100;
+static constexpr uint32_t K_RECORD_SECONDS = 5;
+static constexpr size_t K_SAMPLE_COUNT = K_SAMPLE_RATE * K_RECORD_SECONDS;
 
 static int16_t *s_rec_buf = nullptr;
 static bool s_busy = false;
@@ -23,26 +24,26 @@ void setup(void) {
     M5.begin();
     printf("board=%d\n", (int)M5.getBoard());
 
-    M5.Lcd.setRotation(1);
+    M5.Lcd.setRotation(0);
     M5.Lcd.setTextDatum(middle_center);
     M5.Lcd.setTextColor(WHITE);
     M5.Lcd.setFont(&fonts::FreeMonoBold9pt7b);
 
-    s_rec_buf = (int16_t *)allocSamples(kSampleCount);
+    s_rec_buf = (int16_t *)allocSamples(K_SAMPLE_COUNT);
     if (!s_rec_buf) {
         M5.Lcd.drawString("malloc failed", M5.Lcd.width() / 2, M5.Lcd.height() / 2);
         return;
     }
-    memset(s_rec_buf, 0, kSampleCount * sizeof(int16_t));
+    memset(s_rec_buf, 0, K_SAMPLE_COUNT * sizeof(int16_t));
 
-    M5.Speaker.setVolume(200);
-    M5.Speaker.end();
+    // Do not call Speaker.end() at boot: it always runs the power-off callback and
+    // can leave ES8311 / IOE1 audio path off in a state the mic callback does not fully undo.
     M5.Mic.begin();
 
     const int cx = M5.Lcd.width() / 2;
-    M5.Lcd.drawString("BtnPWR: 5s REC", cx, 40);
+    M5.Lcd.drawString("BtnA: 5s REC", cx, 40);
     M5.Lcd.drawString("then PLAY", cx, 70);
-    printf("board=%d  samples=%u\n", (int)M5.getBoard(), (unsigned)kSampleCount);
+    printf("board=%d  samples=%u\n", (int)M5.getBoard(), (unsigned)K_SAMPLE_COUNT);
 }
 
 void loop(void) {
@@ -52,7 +53,7 @@ void loop(void) {
         return;
     }
 
-    if (!M5.BtnPWR.wasClicked()) {
+    if (!M5.BtnA.wasClicked()) {
         return;
     }
 
@@ -69,7 +70,11 @@ void loop(void) {
     M5.Lcd.drawString("Recording...", cx, M5.Lcd.height() / 2);
     M5.Lcd.display();
 
-    if (!M5.Mic.record(s_rec_buf, kSampleCount, kSampleRate)) {
+    M5.Speaker.end();
+    M5.delay(20);
+    M5.Mic.begin();
+
+    if (!M5.Mic.record(s_rec_buf, K_SAMPLE_COUNT, K_SAMPLE_RATE)) {
         M5.Lcd.fillScreen(BLACK);
         M5.Lcd.setTextColor(RED);
         M5.Lcd.drawString("record() failed", cx, M5.Lcd.height() / 2);
@@ -78,8 +83,6 @@ void loop(void) {
         return;
     }
 
-    // isRecording() stays 0 briefly until mic_task picks up the buffer; if we
-    // only "while (isRecording())" we exit immediately and skip the real wait.
     {
         uint32_t t0 = millis();
         while (M5.Mic.isRecording() == 0 && millis() - t0 < 2000) {
@@ -107,8 +110,11 @@ void loop(void) {
     M5.Lcd.display();
 
     M5.Mic.end();
+    M5.delay(20);
     M5.Speaker.begin();
-    M5.Speaker.playRaw(s_rec_buf, kSampleCount, kSampleRate, false, 1, 0);
+    M5.Speaker.setVolume(220);
+    M5.delay(50);
+    M5.Speaker.playRaw(s_rec_buf, K_SAMPLE_COUNT, K_SAMPLE_RATE, false, 1, -1);
     while (M5.Speaker.isPlaying()) {
         M5.update();
         M5.delay(1);
@@ -118,7 +124,7 @@ void loop(void) {
 
     M5.Lcd.fillScreen(BLACK);
     M5.Lcd.setTextColor(WHITE);
-    M5.Lcd.drawString("BtnPWR: 5s REC", cx, 40);
+    M5.Lcd.drawString("BtnA: 5s REC", cx, 40);
     M5.Lcd.drawString("then PLAY", cx, 70);
 
     s_busy = false;

@@ -35,12 +35,10 @@ void loop(void) {
         s_color_index = (s_color_index + K_COLOR_COUNT - 1) % K_COLOR_COUNT;
         drawColorScreen(s_color_index);
         M5.Speaker.tone(1600, 200);
-        M5.Power.setVibration(80);
     }
     if (M5.BtnB.wasPressed()) {
         s_color_index = (s_color_index + 1) % K_COLOR_COUNT;
         drawColorScreen(s_color_index);
         M5.Speaker.tone(1600, 200);
-        M5.Power.setVibration(0);
     }
 }

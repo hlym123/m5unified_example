@@ -61,7 +61,7 @@ static void drawImuValues(const m5::IMU_Class::imu_data_t &d) {
 void setup(void) {
     M5.begin();
     printf("Board ID: %d\n", M5.getBoard());
-    M5.Lcd.setRotation(1);
+    M5.Lcd.setRotation(0);
     M5.Lcd.setTextColor(WHITE);
 
     if (!M5.Imu.isEnabled()) {
