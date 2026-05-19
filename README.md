@@ -1,21 +1,18 @@
-# M5GFX 简单示例
+# M5Unified 示例
 
-这是一个使用 PlatformIO 的 M5GFX 简单使用示例项目。
+这是一个使用 PlatformIO 的 `M5Unified` 示例项目，当前默认入口是 RTC 演示。
 
 ## 功能
 
-- 初始化 M5GFX 显示屏
-- 显示文本
-- 绘制基本图形：
-  - 矩形（空心和填充）
-  - 圆形（空心和填充）
-  - 三角形（线条和填充）
-- 动态绘制随机颜色的点
+- 初始化 `M5Unified`
+- 读取并显示板载 RTC 时间
+- 显示 RTC 掉电低压状态
+- 通过 `BtnA` 用编译时间回写 RTC
+- 通过 `BtnB` 立即刷新显示
 
 ## 硬件要求
 
-- M5Stack 设备（支持 M5GFX）
-- 或者使用原生平台（需要 SDL2）进行模拟
+- M5Stack 设备（建议带内置 RTC 的机型，例如 StopWatch / PaperColor）
 
 ## 编译和上传
 
@@ -56,17 +53,20 @@ pio run -e esp32s3_StickS3
 ```
 m5unified_example/
 ├── platformio.ini    # PlatformIO 配置文件
+├── example/
+│   └── rtc_example.cpp  # RTC 示例源码
 ├── src/
-│   └── main.cpp      # 主程序代码
+│   └── main.cpp         # 当前默认编译入口（RTC demo）
 └── README.md         # 本文件
 ```
 
 ## 依赖
 
 - M5GFX 库（位于 `../M5GFX`）
-- M5Unified 库（可选，位于 `../M5Unified`）
+- M5Unified 库（位于 `../M5Unified`）
 
 ## 说明
 
-此示例展示了 M5GFX 的基本绘图功能，适合初学者学习如何使用 M5GFX 库进行图形绘制。
+默认示例会在启动后尝试读取板载 RTC，并把当前编译时间同步到 RTC。
+如果目标板没有可用 RTC，屏幕会显示 `RTC not found`。
 

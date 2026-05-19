@@ -79,6 +79,7 @@ bool parseBuildTime(tm* out)
   t.tm_min = std::atoi(build_time + 3);
   t.tm_sec = std::atoi(build_time + 6);
   t.tm_isdst = 0;
+  mktime(&t);  // let libc derive tm_wday from the calendar date
   *out = t;
   return true;
 }
@@ -103,9 +104,9 @@ void setup(void)
   M5.Lcd.setRotation(0);
   M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
 
-  // if (M5.Rtc.isEnabled()) {
-  //   syncRtcFromBuildTime();
-  // }
+  if (M5.Rtc.isEnabled()) {
+    syncRtcFromBuildTime();
+  }
 
   m5::rtc_datetime_t dt;
   const bool ok = M5.Rtc.getDateTime(&dt);
