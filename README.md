@@ -35,6 +35,18 @@ pio run -t upload
 pio device monitor
 ```
 
+### HAT 18650C 测试
+
+StickC Plus 上的 HAT 18650C 测试使用独立环境（SDA=0，SCL=26），不会改变默认示例：
+
+```bash
+pio run -e m5stack-stickcplus-hat18650c
+pio run -e m5stack-stickcplus-hat18650c -t upload
+pio device monitor -b 115200
+```
+
+测试界面每秒刷新电池电压和电流。`BtnA` 切换充电开关，`BtnB` 在 500/1000/1500/2500 mA 之间循环。
+
 ### 环境选择
 
 - `esp32s3_arduino` - ESP32-S3 开发板（默认）
