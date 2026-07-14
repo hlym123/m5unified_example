@@ -35,17 +35,17 @@ pio run -t upload
 pio device monitor
 ```
 
-### HAT 18650C 测试
+### HAT 18650C Output
 
-StickC Plus 上的 HAT 18650C 测试使用独立环境（SDA=0，SCL=26），不会改变默认示例：
+StickS3 上的 HAT 18650C Output 程序使用独立环境（SDA=8，SCL=0）：
 
 ```bash
-pio run -e m5stack-stickcplus-hat18650c
-pio run -e m5stack-stickcplus-hat18650c -t upload
+pio run -e m5stack-sticks3-hat18650c-output
+pio run -e m5stack-sticks3-hat18650c-output -t upload
 pio device monitor -b 115200
 ```
 
-测试界面每秒刷新电池电压和电流。`BtnA` 切换充电开关，`BtnB` 在 500/1000/1500/2500 mA 之间循环。
+Output 界面每秒刷新电池电压和电流，`BtnA` 切换 Boost 输出。充电测试保留在 `example/hat18650c_charge_test.cpp`。
 
 ### 环境选择
 

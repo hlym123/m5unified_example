@@ -8,9 +8,11 @@
 
 namespace {
 
-constexpr int8_t kHatSda = 0;
-constexpr int8_t kHatScl = 26;
-constexpr uint32_t kHatI2cFrequency = 100000;
+constexpr int8_t kHatSda = 8;
+constexpr int8_t kHatScl = 0;
+constexpr uint32_t kHatI2cFrequency = 400000;
+constexpr uint8_t kChargerAddress = 0x6A;
+constexpr uint8_t kChargerStatusRegister = 0x00;
 constexpr uint32_t kRefreshIntervalMs = 1000;
 constexpr uint16_t kInitialChargeCurrentMa = 868;
 constexpr uint16_t kChargeCurrentList[] = {500, 1000, 1500, 2500};
@@ -23,6 +25,9 @@ bool chargeEnabled = true;
 int8_t currentIndex = -1;
 uint16_t chargeCurrentMa = kInitialChargeCurrentMa;
 uint32_t nextRefreshMs = 0;
+uint32_t logSequence = 0;
+uint32_t sampleCount = 0;
+uint32_t errorCount = 0;
 
 void drawText(const char *text, int32_t x, int32_t y, uint8_t font,
               uint16_t color, textdatum_t datum = top_left) {
@@ -43,16 +48,39 @@ void drawHatMissing() {
   canvas.pushSprite(0, 0);
 }
 
+bool readCharging(bool &charging) {
+  Wire.beginTransmission(kChargerAddress);
+  Wire.write(kChargerStatusRegister);
+  if (Wire.endTransmission(false) != 0) {
+    return false;
+  }
+  if (Wire.requestFrom(kChargerAddress, static_cast<uint8_t>(1),
+                       static_cast<uint8_t>(true)) != 1) {
+    return false;
+  }
+
+  const uint8_t status = Wire.read();
+  charging = ((status >> 4) & 0x03) == AW_CHG_PROGRESS;
+  return true;
+}
+
 void drawStatus() {
   const float voltage = hat.getBatteryVoltage();
   const float current = hat.getBatteryCurrent();
-  const bool charging = hat.isCharging();
+  bool charging = false;
+  const bool statusReadOk = readCharging(charging);
+  const bool sampleOk = !isnan(voltage) && !isnan(current) && statusReadOk;
+  ++sampleCount;
+  if (!sampleOk) {
+    ++errorCount;
+  }
   const uint16_t valueColor = charging ? TFT_GREEN : TFT_WHITE;
 
   char voltageText[16];
   char currentText[16];
   char chargeText[16];
   char settingText[16];
+  char errorText[24];
 
   if (isnan(voltage)) {
     snprintf(voltageText, sizeof(voltageText), "--.--V");
@@ -67,6 +95,9 @@ void drawStatus() {
   snprintf(chargeText, sizeof(chargeText), "CHG %s",
            chargeEnabled ? "ON" : "OFF");
   snprintf(settingText, sizeof(settingText), "SET %umA", chargeCurrentMa);
+  snprintf(errorText, sizeof(errorText), "ERR %lu/%lu",
+           static_cast<unsigned long>(errorCount),
+           static_cast<unsigned long>(sampleCount));
 
   canvas.fillScreen(TFT_BLACK);
   drawText("CHARGE", canvas.width() / 2, 6, 2, TFT_GREEN, top_center);
@@ -80,12 +111,17 @@ void drawStatus() {
   drawText("CONTROL", 10, 151, 1, TFT_CYAN);
   drawText(chargeText, 18, 167, 2, chargeEnabled ? TFT_GREEN : TFT_RED);
   drawText(settingText, 18, 195, 1, TFT_DARKGREY);
-  drawText("A:ON/OFF B:mA", 18, 222, 1, TFT_DARKGREY);
+  drawText(errorText, 18, 208, 1, errorCount ? TFT_RED : TFT_DARKGREY);
+  drawText("A:ON/OFF B:mA", 18, 224, 1, TFT_DARKGREY);
   canvas.pushSprite(0, 0);
 
-  Serial.printf("VBAT=%.3fV current=%+.3fA charging=%d enabled=%d set=%umA\r\n",
-                voltage, current, charging ? 1 : 0, chargeEnabled ? 1 : 0,
-                chargeCurrentMa);
+  Serial.printf(
+      "[%06lu] VBAT=%.3fV current=%+.3fA charging=%d enabled=%d set=%umA "
+      "err_count=%lu/%lu\r\n",
+      static_cast<unsigned long>(++logSequence), voltage, current,
+      charging ? 1 : 0, chargeEnabled ? 1 : 0, chargeCurrentMa,
+      static_cast<unsigned long>(errorCount),
+      static_cast<unsigned long>(sampleCount));
 }
 
 bool beginHat() {
