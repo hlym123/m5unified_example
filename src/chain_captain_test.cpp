@@ -3,6 +3,8 @@
 #include <esp_heap_caps.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <ctime>
 #include <cstring>
 
 namespace {
@@ -11,6 +13,9 @@ enum class TestMode : uint8_t {
   screen,
   audio,
   power,
+  rtc,
+  imu,
+  port,
   count,
 };
 
@@ -25,6 +30,8 @@ TestMode mode = TestMode::screen;
 size_t color_index = 0;
 uint8_t brightness_percent = 100;
 bool charge_enabled = true;
+bool port_a_enabled = false;
+bool port_b_enabled = false;
 
 int16_t* recording = nullptr;
 size_t recorded_samples = 0;
@@ -36,6 +43,7 @@ bool playback_active = false;
 uint32_t next_ui_refresh_ms = 0;
 uint32_t next_power_log_ms = 0;
 uint32_t next_audio_codec_log_ms = 0;
+uint32_t next_imu_log_ms = 0;
 
 void drawTitle(const char* title)
 {
@@ -284,6 +292,185 @@ void drawPowerPage()
   }
 }
 
+bool parseBuildTime(tm* out)
+{
+  if (!out) { return false; }
+
+  static constexpr const char* months = "JanFebMarAprMayJunJulAugSepOctNovDec";
+  const char* date = __DATE__;
+  const char* time = __TIME__;
+  char month_name[4] = {date[0], date[1], date[2], '\0'};
+  const char* month_pos = std::strstr(months, month_name);
+  if (!month_pos) { return false; }
+
+  tm t = {};
+  t.tm_mon = (month_pos - months) / 3;
+  t.tm_mday = std::atoi(date + 4);
+  t.tm_year = std::atoi(date + 7) - 1900;
+  t.tm_hour = std::atoi(time);
+  t.tm_min = std::atoi(time + 3);
+  t.tm_sec = std::atoi(time + 6);
+  t.tm_isdst = 0;
+  mktime(&t);
+  *out = t;
+  return true;
+}
+
+void setRtcFromBuildTime()
+{
+  tm build_time;
+  if (!parseBuildTime(&build_time)) {
+    Serial.println("[RTC] parse build time failed");
+    return;
+  }
+  M5.Rtc.setDateTime(&build_time);
+  M5.Rtc.setSystemTimeFromRtc();
+  Serial.printf("[RTC] set build time %04d-%02d-%02d %02d:%02d:%02d\n",
+                build_time.tm_year + 1900, build_time.tm_mon + 1, build_time.tm_mday,
+                build_time.tm_hour, build_time.tm_min, build_time.tm_sec);
+}
+
+void setRtcFixedTime()
+{
+  tm fixed_time = {};
+  fixed_time.tm_year = 2026 - 1900;
+  fixed_time.tm_mon = 7 - 1;
+  fixed_time.tm_mday = 16;
+  fixed_time.tm_hour = 22;
+  fixed_time.tm_min = 55;
+  fixed_time.tm_sec = 0;
+  fixed_time.tm_isdst = 0;
+  mktime(&fixed_time);
+  M5.Rtc.setDateTime(&fixed_time);
+  M5.Rtc.setSystemTimeFromRtc();
+  Serial.println("[RTC] set fixed time 2026-07-16 22:55:00");
+}
+
+void drawRtcPage(bool full_redraw)
+{
+  if (full_redraw) {
+    drawTitle("RTC TEST");
+    M5.Display.setTextSize(1);
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Display.drawString("B: SET BUILD TIME", M5.Display.width() / 2, 178);
+    M5.Display.drawString("C: SET 2026/07/16 22:55", M5.Display.width() / 2, 198);
+    M5.Display.setTextDatum(bottom_center);
+    M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+    M5.Display.drawString("A: NEXT PAGE", M5.Display.width() / 2,
+                          M5.Display.height() - 10);
+  }
+
+  M5.Display.fillRect(0, 48, M5.Display.width(), 112, TFT_BLACK);
+
+  m5::rtc_datetime_t dt;
+  const bool ok = M5.Rtc.isEnabled() && M5.Rtc.getDateTime(&dt);
+
+  M5.Display.setTextDatum(middle_center);
+  M5.Display.setTextSize(2);
+  char line[40];
+  if (ok) {
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    snprintf(line, sizeof(line), "%04d/%02d/%02d",
+             dt.date.year, dt.date.month, dt.date.date);
+    M5.Display.drawString(line, M5.Display.width() / 2, 72);
+    snprintf(line, sizeof(line), "%02d:%02d:%02d",
+             dt.time.hours, dt.time.minutes, dt.time.seconds);
+    M5.Display.drawString(line, M5.Display.width() / 2, 111);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(M5.Rtc.getVoltLow() ? TFT_YELLOW : TFT_GREEN, TFT_BLACK);
+    M5.Display.drawString(M5.Rtc.getVoltLow() ? "RTC VOLTAGE LOW" : "RTC OK",
+                          M5.Display.width() / 2, 145);
+  } else {
+    M5.Display.setTextColor(TFT_RED, TFT_BLACK);
+    M5.Display.drawString("RTC NOT FOUND", M5.Display.width() / 2, 96);
+  }
+}
+
+void drawImuPage(bool full_redraw)
+{
+  if (full_redraw) {
+    drawTitle("IMU 9AXIS TEST");
+    M5.Display.setTextDatum(bottom_center);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+    M5.Display.drawString("A: NEXT PAGE", M5.Display.width() / 2,
+                          M5.Display.height() - 10);
+  }
+
+  M5.Display.fillRect(0, 42, M5.Display.width(), 150, TFT_BLACK);
+
+  if (!M5.Imu.isEnabled()) {
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.setTextSize(2);
+    M5.Display.setTextColor(TFT_RED, TFT_BLACK);
+    M5.Display.drawString("IMU NOT FOUND", M5.Display.width() / 2, 100);
+    return;
+  }
+
+  M5.Imu.update();
+  const auto& data = M5.Imu.getImuData();
+
+  char line[44];
+  M5.Display.setTextDatum(middle_left);
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  snprintf(line, sizeof(line), "ACC X:%7.2f  Y:%7.2f", data.accel.x, data.accel.y);
+  M5.Display.drawString(line, 8, 51);
+  snprintf(line, sizeof(line), "ACC Z:%7.2f g", data.accel.z);
+  M5.Display.drawString(line, 8, 73);
+  snprintf(line, sizeof(line), "GYR X:%7.1f  Y:%7.1f", data.gyro.x, data.gyro.y);
+  M5.Display.drawString(line, 8, 101);
+  snprintf(line, sizeof(line), "GYR Z:%7.1f dps", data.gyro.z);
+  M5.Display.drawString(line, 8, 123);
+  snprintf(line, sizeof(line), "MAG X:%7.1f  Y:%7.1f", data.mag.x, data.mag.y);
+  M5.Display.drawString(line, 8, 151);
+  snprintf(line, sizeof(line), "MAG Z:%7.1f uT", data.mag.z);
+  M5.Display.drawString(line, 8, 173);
+
+  if (millis() >= next_imu_log_ms) {
+    next_imu_log_ms = millis() + 1000;
+    Serial.printf("[IMU] acc=%.2f,%.2f,%.2f gyro=%.1f,%.1f,%.1f mag=%.1f,%.1f,%.1f\n",
+                  data.accel.x, data.accel.y, data.accel.z,
+                  data.gyro.x, data.gyro.y, data.gyro.z,
+                  data.mag.x, data.mag.y, data.mag.z);
+  }
+}
+
+void drawPortPage(bool full_redraw)
+{
+  if (full_redraw) {
+    drawTitle("PORT TEST");
+    M5.Display.setTextDatum(bottom_center);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
+    M5.Display.drawString("A: NEXT PAGE", M5.Display.width() / 2,
+                          M5.Display.height() - 10);
+  }
+
+  M5.Display.fillRect(0, 45, M5.Display.width(), 150, TFT_BLACK);
+
+  const float port_a_mv = std::max(0.0f, M5.Power.getExtVoltage(m5::ext_PA));
+  const float port_b_mv = std::max(0.0f, M5.Power.getExtVoltage(
+      static_cast<m5::ext_port_mask_t>(m5::ext_PB1 | m5::ext_PB2)));
+  char line[40];
+  M5.Display.setTextDatum(middle_left);
+  M5.Display.setTextSize(2);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  snprintf(line, sizeof(line), "PORT.A: %.2fV", static_cast<double>(port_a_mv) / 1000.0);
+  M5.Display.drawString(line, 18, 65);
+  snprintf(line, sizeof(line), "PORT.B: %.2fV", static_cast<double>(port_b_mv) / 1000.0);
+  M5.Display.drawString(line, 18, 111);
+
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(port_a_enabled ? TFT_GREEN : TFT_LIGHTGREY, TFT_BLACK);
+  snprintf(line, sizeof(line), "B: PORT.A POWER %s", port_a_enabled ? "ON" : "OFF");
+  M5.Display.drawString(line, 18, 156);
+  M5.Display.setTextColor(port_b_enabled ? TFT_GREEN : TFT_LIGHTGREY, TFT_BLACK);
+  snprintf(line, sizeof(line), "C: PORT.B POWER %s", port_b_enabled ? "ON" : "OFF");
+  M5.Display.drawString(line, 18, 181);
+}
+
 void stopAudioForPageChange()
 {
   if (recording_active) { stopRecording(); }
@@ -296,6 +483,9 @@ void drawCurrentPage()
     case TestMode::screen: drawScreenPage(); break;
     case TestMode::audio: drawAudioPage(); break;
     case TestMode::power: drawPowerPage(); break;
+    case TestMode::rtc: drawRtcPage(true); break;
+    case TestMode::imu: drawImuPage(true); break;
+    case TestMode::port: drawPortPage(true); break;
     default: break;
   }
 }
@@ -372,6 +562,51 @@ void handlePowerButtons()
   }
 }
 
+void handleRtcButtons()
+{
+  if (M5.BtnB.wasClicked()) {
+    setRtcFromBuildTime();
+    drawRtcPage(false);
+  }
+  if (M5.BtnC.wasClicked()) {
+    setRtcFixedTime();
+    drawRtcPage(false);
+  }
+  if (millis() >= next_ui_refresh_ms) {
+    next_ui_refresh_ms = millis() + 500;
+    drawRtcPage(false);
+  }
+}
+
+void handleImuButtons()
+{
+  if (millis() >= next_ui_refresh_ms) {
+    next_ui_refresh_ms = millis() + 100;
+    drawImuPage(false);
+  }
+}
+
+void handlePortButtons()
+{
+  if (M5.BtnB.wasClicked()) {
+    port_a_enabled = !port_a_enabled;
+    M5.Power.setExtOutput(port_a_enabled, m5::ext_PA);
+    Serial.printf("[PORT] A power=%u\n", port_a_enabled);
+    drawPortPage(false);
+  }
+  if (M5.BtnC.wasClicked()) {
+    port_b_enabled = !port_b_enabled;
+    M5.Power.setExtOutput(port_b_enabled,
+        static_cast<m5::ext_port_mask_t>(m5::ext_PB1 | m5::ext_PB2));
+    Serial.printf("[PORT] B power=%u\n", port_b_enabled);
+    drawPortPage(false);
+  }
+  if (millis() >= next_ui_refresh_ms) {
+    next_ui_refresh_ms = millis() + 500;
+    drawPortPage(false);
+  }
+}
+
 void printI2cDevices()
 {
   constexpr uint8_t addresses[] = {0x18, 0x32, 0x4F, 0x68, 0x6E};
@@ -422,6 +657,11 @@ void setup()
 
   charge_enabled = true;
   M5.Power.setBatteryCharge(charge_enabled);
+  port_a_enabled = false;
+  port_b_enabled = false;
+  M5.Power.setExtOutput(false, m5::ext_PA);
+  M5.Power.setExtOutput(false,
+      static_cast<m5::ext_port_mask_t>(m5::ext_PB1 | m5::ext_PB2));
   M5.Display.setBrightness(255);
   drawCurrentPage();
 }
@@ -443,6 +683,9 @@ void loop()
       case TestMode::screen: handleScreenButtons(); break;
       case TestMode::audio: handleAudioButtons(); break;
       case TestMode::power: handlePowerButtons(); break;
+      case TestMode::rtc: handleRtcButtons(); break;
+      case TestMode::imu: handleImuButtons(); break;
+      case TestMode::port: handlePortButtons(); break;
       default: break;
     }
   }
