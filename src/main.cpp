@@ -1,133 +1,184 @@
 #include "M5Unified.h"
+#include <SD.h>
+#include <SPI.h>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <ctime>
 
 namespace {
 
-static constexpr uint32_t kDrawIntervalMs = 250;
-static constexpr const char* kWeekName[7] = {
-  "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
-};
+static constexpr uint32_t kPowerLogIntervalMs = 5000;
+static constexpr uint32_t kScreenRefreshIntervalMs = 15000;
+static constexpr int kCardDetectPin = 48;
 
-void drawRtcScreen(bool enabled, const m5::rtc_datetime_t* dt, bool low_voltage)
+SPIClass sd_spi(FSPI);
+bool sd_mounted = false;
+uint32_t key1_count = 0;
+uint32_t key2_count = 0;
+uint32_t power_key_count = 0;
+
+const char* chargingStateName(m5::Power_Class::is_charging_t state)
 {
-  const int cx = M5.Lcd.width() / 2;
-  const int cy = M5.Lcd.height() / 2 + 8;
-
-  M5.Lcd.fillScreen(TFT_BLACK);
-  M5.Lcd.drawCircle(cx, cy, (M5.Lcd.height() / 2) - 4, TFT_DARKGREY);
-  M5.Lcd.setTextDatum(top_center);
-  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Lcd.setFont(&fonts::FreeMono9pt7b);
-  M5.Lcd.drawString("RTC Demo", cx, 42);
-
-  M5.Lcd.setTextDatum(middle_center);
-  M5.Lcd.setFont(&fonts::Font2);
-
-  if (!enabled) {
-    M5.Lcd.setTextColor(TFT_RED, TFT_BLACK);
-    M5.Lcd.drawString("RTC not found", cx, cy - 18);
-    M5.Lcd.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    M5.Lcd.drawString("Check board wiring", cx, cy + 12);
-    M5.Lcd.drawString("or config", cx, cy + 36);
-    return;
+  switch (state) {
+  case m5::Power_Class::is_charging_t::is_charging:
+    return "charging";
+  case m5::Power_Class::is_charging_t::is_discharging:
+    return "not charging";
+  default:
+    return "unknown";
   }
-
-  char line[64];
-  const int weekday = (dt->date.weekDay >= 0 && dt->date.weekDay < 7) ? dt->date.weekDay : 0;
-
-  std::snprintf(line, sizeof(line), "Date : %04d-%02d-%02d %s",
-                dt->date.year,
-                dt->date.month,
-                dt->date.date,
-                kWeekName[weekday]);
-  M5.Lcd.drawString(line, cx, cy - 52);
-
-  std::snprintf(line, sizeof(line), "Time : %02d:%02d:%02d",
-                dt->time.hours,
-                dt->time.minutes,
-                dt->time.seconds);
-  M5.Lcd.drawString(line, cx, cy - 16);
-
-  M5.Lcd.setTextColor(low_voltage ? TFT_YELLOW : TFT_GREEN, TFT_BLACK);
-  M5.Lcd.drawString(low_voltage ? "RTC status : voltage low" : "RTC status : OK", cx, cy + 18);
-
-  M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
-  M5.Lcd.drawString("BtnA: sync from build", cx, cy + 58);
-  M5.Lcd.drawString("BtnB: refresh", cx, cy + 86);
 }
 
-bool parseBuildTime(tm* out)
+void printPowerStatus()
 {
-  if (!out) { return false; }
-
-  static constexpr const char* month_name = "JanFebMarAprMayJunJulAugSepOctNovDec";
-  const char* build_date = __DATE__;
-  const char* build_time = __TIME__;
-
-  char month_str[4] = { build_date[0], build_date[1], build_date[2], '\0' };
-  const char* month_pos = std::strstr(month_name, month_str);
-  if (!month_pos) { return false; }
-
-  tm t = {};
-  t.tm_mon = (month_pos - month_name) / 3;
-  t.tm_mday = std::atoi(build_date + 4);
-  t.tm_year = std::atoi(build_date + 7) - 1900;
-  t.tm_hour = std::atoi(build_time + 0);
-  t.tm_min = std::atoi(build_time + 3);
-  t.tm_sec = std::atoi(build_time + 6);
-  t.tm_isdst = 0;
-  *out = t;
-  return true;
+  Serial.printf("Power: PMIC=%u VBAT=%d mV VBUS=%d mV level=%d%% state=%s\n",
+                static_cast<unsigned>(M5.Power.getType()),
+                M5.Power.getBatteryVoltage(),
+                M5.Power.getVBUSVoltage(),
+                M5.Power.getBatteryLevel(),
+                chargingStateName(M5.Power.isCharging()));
 }
 
-void syncRtcFromBuildTime(void)
+void drawDashboard()
 {
-  tm build_tm;
-  if (!parseBuildTime(&build_tm)) {
+  char line[96];
+  const int center_x = M5.Display.width() / 2;
+
+  M5.Display.startWrite();
+  M5.Display.fillScreen(TFT_WHITE);
+  M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
+  M5.Display.setTextDatum(top_center);
+  M5.Display.setFont(&fonts::Font4);
+  M5.Display.setTextSize(2);
+  M5.Display.drawString("M5Stack PaperDIY", center_x, 24);
+
+  M5.Display.setTextSize(1);
+  std::snprintf(line, sizeof(line), "Board ID: %u    Display: %d x %d",
+                static_cast<unsigned>(M5.getBoard()),
+                M5.Display.width(),
+                M5.Display.height());
+  M5.Display.drawString(line, center_x, 120);
+
+  std::snprintf(line, sizeof(line), "M5PM1: %s    VBAT: %d mV    VBUS: %d mV",
+                M5.Power.getType() == m5::Power_Class::pmic_t::pmic_m5pm1 ? "OK" : "ERROR",
+                M5.Power.getBatteryVoltage(),
+                M5.Power.getVBUSVoltage());
+  M5.Display.drawString(line, center_x, 175);
+
+  std::snprintf(line, sizeof(line), "Battery: %d%%    Charge: %s",
+                M5.Power.getBatteryLevel(),
+                chargingStateName(M5.Power.isCharging()));
+  M5.Display.drawString(line, center_x, 230);
+
+  std::snprintf(line, sizeof(line), "TF: %s    Detect G48: %s",
+                sd_mounted ? "mounted" : "not mounted",
+                digitalRead(kCardDetectPin) == LOW ? "inserted" : "empty");
+  M5.Display.drawString(line, center_x, 285);
+
+  std::snprintf(line, sizeof(line), "KEY1 / BtnA: %u    KEY2 / BtnB: %u    PWR: %u",
+                static_cast<unsigned>(key1_count),
+                static_cast<unsigned>(key2_count),
+                static_cast<unsigned>(power_key_count));
+  M5.Display.drawString(line, center_x, 340);
+  M5.Display.drawString("Press KEY1, KEY2, and PWR to verify input", center_x, 405);
+  M5.Display.endWrite();
+  M5.Display.display();
+  M5.Display.waitDisplay();
+}
+
+void initSdCard()
+{
+  const int sclk = M5.getPin(m5::pin_name_t::sd_spi_sclk);
+  const int mosi = M5.getPin(m5::pin_name_t::sd_spi_mosi);
+  const int miso = M5.getPin(m5::pin_name_t::sd_spi_miso);
+  const int cs = M5.getPin(m5::pin_name_t::sd_spi_cs);
+  Serial.printf("TF pins: SCK=%d MOSI=%d MISO=%d CS=%d DET=%d\n",
+                sclk, mosi, miso, cs, kCardDetectPin);
+
+  pinMode(kCardDetectPin, INPUT_PULLUP);
+  if (digitalRead(kCardDetectPin) != LOW) {
+    Serial.println("TF not mounted; detect=empty");
     return;
   }
-  M5.Rtc.setDateTime(&build_tm);
-  M5.Rtc.setSystemTimeFromRtc();
+  sd_spi.begin(sclk, miso, mosi, cs);
+  sd_mounted = SD.begin(cs, sd_spi, 25000000);
+  if (sd_mounted) {
+    Serial.printf("TF mounted: type=%u size=%llu MB\n",
+                  static_cast<unsigned>(SD.cardType()),
+                  static_cast<unsigned long long>(SD.cardSize() / (1024ULL * 1024ULL)));
+  } else {
+    Serial.printf("TF not mounted; detect=%s\n",
+                  digitalRead(kCardDetectPin) == LOW ? "inserted" : "empty");
+  }
 }
 
 }  // namespace
 
-void setup(void)
+void setup()
 {
+  Serial.begin(115200);
+  delay(1500);
+  Serial.println("PaperDIY test boot");
+
   auto cfg = M5.config();
-  cfg.internal_rtc = true;
+  cfg.internal_imu = false;
+  cfg.internal_rtc = false;
+  cfg.internal_spk = false;
+  cfg.internal_mic = false;
+  Serial.println("M5.begin start");
   M5.begin(cfg);
-  M5.Lcd.setRotation(0);
-  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+  Serial.println("M5.begin done");
+  M5.Display.setRotation(1);
 
-  // if (M5.Rtc.isEnabled()) {
-  //   syncRtcFromBuildTime();
-  // }
+  Serial.printf("Detected board ID: %u (expected 34)\n", static_cast<unsigned>(M5.getBoard()));
+  Serial.printf("Display size: %d x %d\n", M5.Display.width(), M5.Display.height());
+  Serial.printf("I2C pins: SCL=%d SDA=%d\n",
+                M5.getPin(m5::pin_name_t::in_i2c_scl),
+                M5.getPin(m5::pin_name_t::in_i2c_sda));
+  if (M5.getBoard() != m5::board_t::board_M5PaperDIY) {
+    Serial.println("ERROR: PaperDIY was not detected");
+  }
+  if (M5.Power.getType() != m5::Power_Class::pmic_t::pmic_m5pm1) {
+    Serial.println("ERROR: M5PM1 was not initialized");
+  }
 
-  m5::rtc_datetime_t dt;
-  const bool ok = M5.Rtc.getDateTime(&dt);
-  drawRtcScreen(M5.Rtc.isEnabled() && ok, &dt, M5.Rtc.getVoltLow());
+  printPowerStatus();
+  Serial.println("Initial dashboard draw start");
+  drawDashboard();
+  Serial.println("Initial dashboard draw done");
+  Serial.println("TF test start");
+  initSdCard();
+  Serial.println("TF test done");
+  drawDashboard();
 }
 
-void loop(void)
+void loop()
 {
   M5.update();
-
-  if (M5.BtnA.wasPressed() && M5.Rtc.isEnabled()) {
-    syncRtcFromBuildTime();
+  bool input_changed = false;
+  if (M5.BtnA.wasPressed()) {
+    ++key1_count;
+    input_changed = true;
+    Serial.printf("KEY1 / BtnA pressed: %u\n", static_cast<unsigned>(key1_count));
+  }
+  if (M5.BtnB.wasPressed()) {
+    ++key2_count;
+    input_changed = true;
+    Serial.printf("KEY2 / BtnB pressed: %u\n", static_cast<unsigned>(key2_count));
+  }
+  if (M5.BtnPWR.wasPressed()) {
+    ++power_key_count;
+    input_changed = true;
+    Serial.printf("PWR / BtnPWR pressed: %u\n", static_cast<unsigned>(power_key_count));
   }
 
-  static uint32_t next_draw_ms = 0;
-  const uint32_t now = millis();
-  if (!M5.BtnB.wasPressed() && now < next_draw_ms) {
-    return;
+  static uint32_t next_power_log_ms = millis() + kPowerLogIntervalMs;
+  if (static_cast<int32_t>(millis() - next_power_log_ms) >= 0) {
+    printPowerStatus();
+    next_power_log_ms = millis() + kPowerLogIntervalMs;
   }
-  next_draw_ms = now + kDrawIntervalMs;
 
-  m5::rtc_datetime_t dt;
-  const bool ok = M5.Rtc.getDateTime(&dt);
-  drawRtcScreen(M5.Rtc.isEnabled() && ok, &dt, M5.Rtc.getVoltLow());
+  static uint32_t next_screen_refresh_ms = millis() + kScreenRefreshIntervalMs;
+  if (input_changed || static_cast<int32_t>(millis() - next_screen_refresh_ms) >= 0) {
+    drawDashboard();
+    next_screen_refresh_ms = millis() + kScreenRefreshIntervalMs;
+  }
 }
