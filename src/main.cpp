@@ -11,6 +11,7 @@ static constexpr int kCardDetectPin = 48;
 
 SPIClass sd_spi(FSPI);
 bool sd_mounted = false;
+bool charge_enabled = true;
 uint32_t key1_count = 0;
 uint32_t key2_count = 0;
 uint32_t power_key_count = 0;
@@ -29,56 +30,75 @@ const char* chargingStateName(m5::Power_Class::is_charging_t state)
 
 void printPowerStatus()
 {
-  Serial.printf("Power: PMIC=%u VBAT=%d mV VBUS=%d mV level=%d%% state=%s\n",
+  Serial.printf("Power: PMIC=%u VBAT=%d mV VBUS=%d mV level=%d%% charge_enable=%s state=%s key=%u\n",
                 static_cast<unsigned>(M5.Power.getType()),
                 M5.Power.getBatteryVoltage(),
                 M5.Power.getVBUSVoltage(),
                 M5.Power.getBatteryLevel(),
-                chargingStateName(M5.Power.isCharging()));
+                charge_enabled ? "on" : "off",
+                chargingStateName(M5.Power.isCharging()),
+                static_cast<unsigned>(M5.Power.getKeyState()));
 }
 
 void drawDashboard()
 {
   char line[96];
-  const int center_x = M5.Display.width() / 2;
+  constexpr int left = 30;
 
   M5.Display.startWrite();
   M5.Display.fillScreen(TFT_WHITE);
   M5.Display.setTextColor(TFT_BLACK, TFT_WHITE);
-  M5.Display.setTextDatum(top_center);
+  M5.Display.setTextDatum(top_left);
   M5.Display.setFont(&fonts::Font4);
   M5.Display.setTextSize(2);
-  M5.Display.drawString("M5Stack PaperDIY", center_x, 24);
+  M5.Display.drawString("M5Stack PaperDIY", left, 24);
+  M5.Display.drawFastHLine(left, 82, M5.Display.width() - left * 2, TFT_BLACK);
 
   M5.Display.setTextSize(1);
-  std::snprintf(line, sizeof(line), "Board ID: %u    Display: %d x %d",
+  std::snprintf(line, sizeof(line), "Board ID: %u [%s]",
                 static_cast<unsigned>(M5.getBoard()),
-                M5.Display.width(),
-                M5.Display.height());
-  M5.Display.drawString(line, center_x, 120);
+                M5.getBoard() == m5::board_t::board_M5PaperDIY ? "OK" : "ERROR");
+  M5.Display.drawString(line, left, 110);
 
-  std::snprintf(line, sizeof(line), "M5PM1: %s    VBAT: %d mV    VBUS: %d mV",
-                M5.Power.getType() == m5::Power_Class::pmic_t::pmic_m5pm1 ? "OK" : "ERROR",
-                M5.Power.getBatteryVoltage(),
-                M5.Power.getVBUSVoltage());
-  M5.Display.drawString(line, center_x, 175);
+  std::snprintf(line, sizeof(line), "Display: %d x %d",
+                M5.Display.width(), M5.Display.height());
+  M5.Display.drawString(line, left, 160);
 
-  std::snprintf(line, sizeof(line), "Battery: %d%%    Charge: %s",
-                M5.Power.getBatteryLevel(),
-                chargingStateName(M5.Power.isCharging()));
-  M5.Display.drawString(line, center_x, 230);
+  std::snprintf(line, sizeof(line), "M5PM1: %s",
+                M5.Power.getType() == m5::Power_Class::pmic_t::pmic_m5pm1 ? "OK" : "ERROR");
+  M5.Display.drawString(line, left, 220);
 
-  std::snprintf(line, sizeof(line), "TF: %s    Detect G48: %s",
-                sd_mounted ? "mounted" : "not mounted",
+  std::snprintf(line, sizeof(line), "VBAT: %d mV    Battery: %d%%",
+                M5.Power.getBatteryVoltage(), M5.Power.getBatteryLevel());
+  M5.Display.drawString(line, left, 270);
+
+  std::snprintf(line, sizeof(line), "VBUS: %d mV", M5.Power.getVBUSVoltage());
+  M5.Display.drawString(line, left, 320);
+
+  std::snprintf(line, sizeof(line), "Charge enable: %s", charge_enabled ? "ON" : "OFF");
+  M5.Display.drawString(line, left, 370);
+
+  std::snprintf(line, sizeof(line), "Charge state: %s", chargingStateName(M5.Power.isCharging()));
+  M5.Display.drawString(line, left, 420);
+
+  std::snprintf(line, sizeof(line), "TF: %s", sd_mounted ? "mounted" : "not mounted");
+  M5.Display.drawString(line, left, 480);
+
+  std::snprintf(line, sizeof(line), "Detect G48: %s",
                 digitalRead(kCardDetectPin) == LOW ? "inserted" : "empty");
-  M5.Display.drawString(line, center_x, 285);
+  M5.Display.drawString(line, left, 530);
 
-  std::snprintf(line, sizeof(line), "KEY1 / BtnA: %u    KEY2 / BtnB: %u    PWR: %u",
-                static_cast<unsigned>(key1_count),
-                static_cast<unsigned>(key2_count),
-                static_cast<unsigned>(power_key_count));
-  M5.Display.drawString(line, center_x, 340);
-  M5.Display.drawString("Press KEY1, KEY2, and PWR to verify input", center_x, 405);
+  std::snprintf(line, sizeof(line), "KEY1 / BtnA: %u", static_cast<unsigned>(key1_count));
+  M5.Display.drawString(line, left, 590);
+
+  std::snprintf(line, sizeof(line), "KEY2 / BtnB: %u", static_cast<unsigned>(key2_count));
+  M5.Display.drawString(line, left, 640);
+
+  std::snprintf(line, sizeof(line), "PWR / BtnPWR: %u", static_cast<unsigned>(power_key_count));
+  M5.Display.drawString(line, left, 690);
+
+  M5.Display.drawString("KEY1 toggles battery charge", left, 770);
+  M5.Display.drawString("KEY2/PWR verify input", left, 820);
   M5.Display.endWrite();
   M5.Display.display();
   M5.Display.waitDisplay();
@@ -126,7 +146,9 @@ void setup()
   Serial.println("M5.begin start");
   M5.begin(cfg);
   Serial.println("M5.begin done");
-  M5.Display.setRotation(1);
+  M5.Display.setRotation(0);
+  charge_enabled = true;
+  M5.Power.setBatteryCharge(charge_enabled);
 
   Serial.printf("Detected board ID: %u (expected 34)\n", static_cast<unsigned>(M5.getBoard()));
   Serial.printf("Display size: %d x %d\n", M5.Display.width(), M5.Display.height());
@@ -156,8 +178,10 @@ void loop()
   bool input_changed = false;
   if (M5.BtnA.wasPressed()) {
     ++key1_count;
+    charge_enabled = !charge_enabled;
+    M5.Power.setBatteryCharge(charge_enabled);
     input_changed = true;
-    Serial.printf("KEY1 / BtnA pressed: %u\n", static_cast<unsigned>(key1_count));
+    Serial.printf("KEY1 / BtnA: battery charge %s\n", charge_enabled ? "enabled" : "disabled");
   }
   if (M5.BtnB.wasPressed()) {
     ++key2_count;
