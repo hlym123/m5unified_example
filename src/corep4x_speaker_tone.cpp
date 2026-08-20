@@ -104,35 +104,43 @@ void drawButton(const Button& button, uint16_t color, bool selected) {
   M5.Display.drawString(button.label, button.x + button.w / 2, button.y + button.h / 2);
 }
 
-void drawScreen() {
+void drawCenteredLine(const char* text, int16_t y, const lgfx::IFont* font,
+                      uint16_t color) {
+  M5.Display.setTextDatum(top_center);
+  M5.Display.setFont(font);
+  M5.Display.setTextColor(color, TFT_BLACK);
+  M5.Display.setTextPadding(M5.Display.width() - 32);
+  M5.Display.drawString(text, M5.Display.width() / 2, y);
+  M5.Display.setTextPadding(0);
+}
+
+void drawScreen(bool initialize = false) {
   char line[80];
-  const int16_t cx = M5.Display.width() / 2;
   const bool playing = M5.Speaker.isPlaying();
 
-  M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextDatum(top_center);
-  M5.Display.setFont(&fonts::FreeMonoBold9pt7b);
-  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Display.drawString("CoreP4X Speaker Tone", cx, 22);
+  M5.Display.startWrite();
+  if (initialize) {
+    M5.Display.fillScreen(TFT_BLACK);
+    drawCenteredLine("CoreP4X Speaker Tone", 22, &fonts::FreeMonoBold9pt7b, TFT_WHITE);
+  }
 
   std::snprintf(line, sizeof(line), "frequency: %u Hz   %s",
                 s_frequency, playing ? "PLAYING" : "STOPPED");
-  M5.Display.drawString(line, cx, 70);
+  drawCenteredLine(line, 70, &fonts::FreeMonoBold9pt7b, TFT_WHITE);
 
-  M5.Display.setFont(&fonts::Font2);
   const char* speaker_status = s_speaker_ready ? "OK" : (s_init_attempted ? "FAIL" : "WAIT");
   std::snprintf(line, sizeof(line), "SPK:%s  ES8311:%s  AMP:%s  I2S:%s",
                 speaker_status,
                 s_codec_present ? "OK" : "FAIL",
                 s_amp_enabled ? "ON" : "OFF",
                 playing ? "PLAY" : "STOP");
-  M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
-  M5.Display.drawString(line, cx, 108);
+  drawCenteredLine(line, 108, &fonts::Font2, TFT_CYAN);
 
   for (const auto& button : kButtons) {
     drawButton(button, TFT_DARKCYAN, s_frequency == button.frequency && playing);
   }
   drawButton(kStopButton, TFT_RED, !playing);
+  M5.Display.endWrite();
 }
 
 void startTone(uint16_t frequency) {
@@ -171,7 +179,7 @@ void setup() {
 
   Serial.printf("CoreP4X speaker: board=%d deferred=%d codec=%d amp=%d\n",
                 static_cast<int>(M5.getBoard()), s_speaker_ready, s_codec_present, s_amp_enabled);
-  drawScreen();
+  drawScreen(true);
 }
 
 void loop() {

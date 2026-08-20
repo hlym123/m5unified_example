@@ -78,35 +78,51 @@ void drawButton(const Button& button, uint16_t color, bool selected, bool enable
   M5.Display.drawString(button.label, button.x + button.w / 2, button.y + button.h / 2);
 }
 
-void drawScreen() {
+void drawCenteredLine(const char* text, int16_t y, const lgfx::IFont* font,
+                      uint16_t color) {
   const int cx = M5.Display.width() / 2;
-  char line[64];
-  M5.Display.fillScreen(TFT_BLACK);
   M5.Display.setTextDatum(top_center);
-  M5.Display.setFont(&fonts::FreeMonoBold9pt7b);
-  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Display.drawString("CoreP4X Audio Test", cx, 26);
-  std::snprintf(line, sizeof(line), "source: %s   state: %s", sourceName(), stateName());
-  M5.Display.drawString(line, cx, 78);
-  std::snprintf(line, sizeof(line), "volume: %u", s_volume);
-  M5.Display.drawString(line, cx, 104);
-  const size_t displayed_frames = s_state == AudioState::Recording ? s_live_recorded_frames : s_recorded_samples;
+  M5.Display.setFont(font);
+  M5.Display.setTextColor(color, TFT_BLACK);
+  M5.Display.setTextPadding(M5.Display.width() - 32);
+  M5.Display.drawString(text, cx, y);
+  M5.Display.setTextPadding(0);
+}
+
+void drawMeter() {
+  char line[64];
+  const size_t displayed_frames =
+      s_state == AudioState::Recording ? s_live_recorded_frames : s_recorded_samples;
   std::snprintf(line, sizeof(line), "recorded: %lu ms   peak: %u",
                 static_cast<unsigned long>((displayed_frames * 1000) / kSampleRate), s_peak);
-  M5.Display.drawString(line, cx, 138);
-  M5.Display.setFont(&fonts::Font2);
-  M5.Display.drawString(s_state == AudioState::Recording ? "Tap REC STOP when finished" : "Record first, then replay", cx, 196);
-  if (s_error) {
-    M5.Display.setTextColor(TFT_RED, TFT_BLACK);
-    M5.Display.drawString(s_error, cx, 228);
+  drawCenteredLine(line, 138, &fonts::FreeMonoBold9pt7b, TFT_WHITE);
+}
+
+void drawScreen(bool initialize = false) {
+  const int cx = M5.Display.width() / 2;
+  char line[80];
+  M5.Display.startWrite();
+  if (initialize) {
+    M5.Display.fillScreen(TFT_BLACK);
+    drawCenteredLine("CoreP4X Audio Test", 26, &fonts::FreeMonoBold9pt7b, TFT_WHITE);
   }
+  std::snprintf(line, sizeof(line), "source: %s   state: %s", sourceName(), stateName());
+  drawCenteredLine(line, 78, &fonts::FreeMonoBold9pt7b, TFT_WHITE);
+  std::snprintf(line, sizeof(line), "volume: %u", s_volume);
+  drawCenteredLine(line, 104, &fonts::FreeMonoBold9pt7b, TFT_WHITE);
+  drawMeter();
+  drawCenteredLine(s_state == AudioState::Recording ? "Tap REC STOP when finished"
+                                                     : "Record first, then replay",
+                   196, &fonts::Font2, TFT_WHITE);
+  drawCenteredLine(s_error ? s_error : "", 228, &fonts::Font2, TFT_RED);
   if (s_audio_probe_valid) {
     std::snprintf(line, sizeof(line), "ES8311:%s  AMP:%s  I2S:%s",
                   s_codec_present ? "OK" : "FAIL", s_amp_enabled ? "ON" : "OFF",
                   M5.Speaker.isPlaying() ? "PLAY" : "STOP");
-    M5.Display.setTextColor(TFT_CYAN, TFT_BLACK);
-    M5.Display.drawString(line, cx, 248);
+  } else {
+    line[0] = '\0';
   }
+  drawCenteredLine(line, 248, &fonts::Font2, TFT_CYAN);
 
   drawButton(kMic1Button, TFT_BLUE, s_source == MicSource::Mic1, s_state != AudioState::Recording && s_state != AudioState::Playing);
   drawButton(kMic2Button, TFT_BLUE, s_source == MicSource::Mic2, s_state != AudioState::Recording && s_state != AudioState::Playing);
@@ -127,6 +143,7 @@ void drawScreen() {
   M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
   std::snprintf(line, sizeof(line), "VOL %u", s_volume);
   M5.Display.drawString(line, cx, kVolumeDownButton.y + kVolumeDownButton.h / 2);
+  M5.Display.endWrite();
 }
 
 void configureMicSource() {
@@ -325,7 +342,7 @@ void setup() {
   else s_error = "BUFFER ALLOC FAILED";
   Serial.printf("CoreP4X audio: board=%d max_samples=%lu\n", static_cast<int>(M5.getBoard()),
                 static_cast<unsigned long>(kMaxSampleCount));
-  drawScreen();
+  drawScreen(true);
 }
 
 void loop() {
@@ -349,7 +366,9 @@ void loop() {
   }
   if (s_state == AudioState::Recording && millis() - s_last_meter_ms >= 200) {
     s_last_meter_ms = millis();
-    drawScreen();
+    M5.Display.startWrite();
+    drawMeter();
+    M5.Display.endWrite();
   }
   if (s_state == AudioState::Playing && !M5.Speaker.isPlaying()) stopPlaying();
   if (M5.Touch.getCount() && M5.Touch.getDetail(0).wasPressed()) {

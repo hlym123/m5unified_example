@@ -106,7 +106,6 @@ void drawDate(bool force = false) {
 
   M5.Display.startWrite();
   char line[32];
-  M5.Display.fillRect(0, 72, M5.Display.width(), 42, TFT_BLACK);
   M5.Display.setTextDatum(top_center);
   M5.Display.setFont(&fonts::Font4);
   if (s_rtc_ok) {
@@ -116,7 +115,9 @@ void drawDate(bool force = false) {
     std::snprintf(line, sizeof(line), "RTC NOT FOUND");
     M5.Display.setTextColor(TFT_RED, TFT_BLACK);
   }
+  M5.Display.setTextPadding(M5.Display.width() - 32);
   M5.Display.drawString(line, M5.Display.width() / 2, 76);
+  M5.Display.setTextPadding(0);
   s_drawn_year = year;
   s_drawn_month = month;
   s_drawn_day = day;
@@ -125,11 +126,12 @@ void drawDate(bool force = false) {
 
 void drawStatus() {
   M5.Display.startWrite();
-  M5.Display.fillRect(0, 292, M5.Display.width(), 38, TFT_BLACK);
   M5.Display.setTextDatum(top_center);
   M5.Display.setFont(&fonts::Font2);
   M5.Display.setTextColor(s_volt_low ? TFT_YELLOW : TFT_GREEN, TFT_BLACK);
+  M5.Display.setTextPadding(M5.Display.width() - 32);
   M5.Display.drawString(s_volt_low ? "RTC VOLTAGE LOW" : s_status, M5.Display.width() / 2, 300);
+  M5.Display.setTextPadding(0);
   M5.Display.endWrite();
 }
 
