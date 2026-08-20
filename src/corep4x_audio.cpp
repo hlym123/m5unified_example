@@ -4,8 +4,8 @@
 #include <esp_heap_caps.h>
 
 namespace {
-constexpr uint32_t kSampleRate = 24000;
-constexpr uint32_t kMaxRecordSeconds = 10;
+constexpr uint32_t kSampleRate = 16000;
+constexpr uint32_t kMaxRecordSeconds = 30;
 constexpr uint32_t kRecordChunkMs = 100;
 constexpr size_t kChannelCount = 2;
 constexpr size_t kMaxFrameCount = kSampleRate * kMaxRecordSeconds;
@@ -93,8 +93,12 @@ void drawMeter() {
   char line[64];
   const size_t displayed_frames =
       s_state == AudioState::Recording ? s_live_recorded_frames : s_recorded_samples;
-  std::snprintf(line, sizeof(line), "recorded: %lu ms   peak: %u",
-                static_cast<unsigned long>((displayed_frames * 1000) / kSampleRate), s_peak);
+  const uint32_t duration_ms =
+      static_cast<uint32_t>((displayed_frames * 1000ULL) / kSampleRate);
+  std::snprintf(line, sizeof(line), "recorded: %lu.%01lu / %lu s  peak:%u",
+                static_cast<unsigned long>(duration_ms / 1000),
+                static_cast<unsigned long>((duration_ms / 100) % 10),
+                static_cast<unsigned long>(kMaxRecordSeconds), s_peak);
   drawCenteredLine(line, 138, &fonts::FreeMonoBold9pt7b, TFT_WHITE);
 }
 
@@ -111,6 +115,10 @@ void drawScreen(bool initialize = false) {
   std::snprintf(line, sizeof(line), "volume: %u", s_volume);
   drawCenteredLine(line, 104, &fonts::FreeMonoBold9pt7b, TFT_WHITE);
   drawMeter();
+  std::snprintf(line, sizeof(line), "%lu Hz stereo capture  max %lu s",
+                static_cast<unsigned long>(kSampleRate),
+                static_cast<unsigned long>(kMaxRecordSeconds));
+  drawCenteredLine(line, 170, &fonts::Font2, TFT_CYAN);
   drawCenteredLine(s_state == AudioState::Recording ? "Tap REC STOP when finished"
                                                      : "Record first, then replay",
                    196, &fonts::Font2, TFT_WHITE);
@@ -340,7 +348,10 @@ void setup() {
   if (!s_samples) s_samples = static_cast<int16_t*>(heap_caps_malloc(kMaxSampleCount * sizeof(*s_samples), MALLOC_CAP_8BIT));
   if (s_samples) std::memset(s_samples, 0, kMaxSampleCount * sizeof(*s_samples));
   else s_error = "BUFFER ALLOC FAILED";
-  Serial.printf("CoreP4X audio: board=%d max_samples=%lu\n", static_cast<int>(M5.getBoard()),
+  Serial.printf("CoreP4X audio: board=%d rate=%luHz max=%lus channels=%lu max_samples=%lu\n",
+                static_cast<int>(M5.getBoard()), static_cast<unsigned long>(kSampleRate),
+                static_cast<unsigned long>(kMaxRecordSeconds),
+                static_cast<unsigned long>(kChannelCount),
                 static_cast<unsigned long>(kMaxSampleCount));
   drawScreen(true);
 }
