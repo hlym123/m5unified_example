@@ -171,7 +171,7 @@ void drawStaticScreen() {
   static constexpr const char* left_labels[] = {
       "BOARD", "PMIC", "PM1 SOURCE", "VBUS", "BATTERY", "CHARGING"};
   static constexpr const char* right_labels[] = {
-      "5V MONITOR", "PORT A 5V", "USB HOST 5V", "CHARGE ENABLE", "RTC", "INTERNAL I2C"};
+      "PM1 5VOUT", "PORT A 5V", "USB HOST 5V", "CHARGE ENABLE", "RTC", "INTERNAL I2C"};
 
   M5.Display.startWrite();
   M5.Display.fillScreen(kBackground);
