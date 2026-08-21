@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
 
 #include <M5Unified.h>
@@ -31,12 +30,12 @@ void dump_ioe(const char* stage)
   static constexpr uint8_t kRegisters[] = {
     0x03, 0x04, 0x05, 0x06, 0x13, 0x14, 0x1B, 0x1C, 0x25, 0x26,
   };
-  std::printf("[M5IOE1] stage=%s", stage);
+  Serial.printf("[M5IOE1] stage=%s", stage);
   for (const auto reg : kRegisters) {
     const uint8_t value = M5.In_I2C.readRegister8(0x4F, reg, 100000);
-    std::printf(" reg%02x=%02x", reg, value);
+    Serial.printf(" reg%02x=%02x", reg, value);
   }
-  std::printf("\n");
+  Serial.printf("\n");
 }
 
 void dump_pm1(const char* stage)
@@ -45,7 +44,7 @@ void dump_pm1(const char* stage)
   const uint8_t vout_low = M5.In_I2C.readRegister8(0x6E, 0x26, 100000);
   const uint8_t vout_high = M5.In_I2C.readRegister8(0x6E, 0x27, 100000);
   const uint16_t vout_mv = vout_low | (static_cast<uint16_t>(vout_high) << 8);
-  std::printf("[M5PM1] stage=%s pwr_cfg=%02x boost=%s vout=%umV\n",
+  Serial.printf("[M5PM1] stage=%s pwr_cfg=%02x boost=%s vout=%umV\n",
               stage, power_config,
               (power_config & (1u << 3)) ? "ON" : "OFF", vout_mv);
 }
@@ -67,12 +66,12 @@ void draw_color()
 
 void scan_i2c()
 {
-  std::printf("[I2C] scan internal bus\n");
+  Serial.printf("[I2C] scan internal bus\n");
   bool found[0x78] = {};
   M5.In_I2C.scanID(found);
   for (uint8_t addr = 8; addr < 0x78; ++addr) {
     if (found[addr]) {
-      std::printf("[I2C] 0x%02x\n", addr);
+      Serial.printf("[I2C] 0x%02x\n", addr);
     }
   }
 }
@@ -96,7 +95,7 @@ void capture_mic(const char* stage)
 {
   const bool mic_ok = M5.Mic.begin();
   if (!mic_ok) {
-    std::printf("[MIC] stage=%s begin=FAIL\n", stage);
+    Serial.printf("[MIC] stage=%s begin=FAIL\n", stage);
     return;
   }
 
@@ -113,7 +112,7 @@ void capture_mic(const char* stage)
       peak_right = std::max(peak_right, std::abs(static_cast<int>(samples[i + 1])));
     }
   }
-  std::printf("[MIC] stage=%s record=%s left=%d right=%d\n",
+  Serial.printf("[MIC] stage=%s record=%s left=%d right=%d\n",
               stage, completed ? "OK" : "FAIL", peak_left, peak_right);
   M5.Mic.end();
 }
@@ -122,11 +121,11 @@ void test_audio()
 {
   M5.Mic.end();
   const bool speaker_ok = M5.Speaker.begin();
-  std::printf("[SPEAKER] begin=%s\n", speaker_ok ? "OK" : "FAIL");
+  Serial.printf("[SPEAKER] begin=%s\n", speaker_ok ? "OK" : "FAIL");
   if (speaker_ok) {
     M5.Speaker.setVolume(96);
     const bool tone_ok = M5.Speaker.tone(1000, 350);
-    std::printf("[SPEAKER] tone=%s\n", tone_ok ? "OK" : "FAIL");
+    Serial.printf("[SPEAKER] tone=%s\n", tone_ok ? "OK" : "FAIL");
     M5.delay(450);
     M5.Speaker.stop();
     M5.Speaker.end();
@@ -139,6 +138,8 @@ void test_audio()
 
 void setup()
 {
+  Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
   auto cfg = M5.config();
   cfg.internal_spk = true;
   cfg.internal_mic = true;
@@ -148,12 +149,12 @@ void setup()
   const auto display_board = M5.Display.getBoard();
   const bool board_ok = board == m5::board_t::board_M5CoreP4X
                      && display_board == m5::board_t::board_M5CoreP4X;
-  std::printf("[BOARD] name=%s id=%d display_id=%d expected=%d result=%s\n",
+  Serial.printf("[BOARD] name=%s id=%d display_id=%d expected=%d result=%s\n",
               board_name(board), static_cast<int>(board),
               static_cast<int>(display_board),
               static_cast<int>(m5::board_t::board_M5CoreP4X),
               board_ok ? "OK" : "FAIL");
-  std::printf("[DISPLAY] %dx%d\n", static_cast<int>(M5.Display.width()),
+  Serial.printf("[DISPLAY] %dx%d\n", static_cast<int>(M5.Display.width()),
               static_cast<int>(M5.Display.height()));
 
   dump_pm1("begin");
@@ -163,7 +164,7 @@ void setup()
   draw_color();
   scan_i2c();
 
-  std::printf("[IMU] begin=%s\n", M5.Imu.begin() ? "OK" : "FAIL");
+  Serial.printf("[IMU] begin=%s\n", M5.Imu.begin() ? "OK" : "FAIL");
   test_audio();
 
   next_color_ms = m5gfx::millis() + 2000;
@@ -188,12 +189,12 @@ void loop()
     M5.Display.fillCircle(touch.x, touch.y, 4, TFT_CYAN);
     if (!touch_was_pressed || std::abs(touch.x - last_touch_x) >= 3
                            || std::abs(touch.y - last_touch_y) >= 3) {
-      std::printf("[TOUCH] state=pressed x=%d y=%d\n", touch.x, touch.y);
+      Serial.printf("[TOUCH] state=pressed x=%d y=%d\n", touch.x, touch.y);
       last_touch_x = touch.x;
       last_touch_y = touch.y;
     }
   } else if (touch_was_pressed) {
-    std::printf("[TOUCH] state=released x=%ld y=%ld\n",
+    Serial.printf("[TOUCH] state=released x=%ld y=%ld\n",
                 static_cast<long>(last_touch_x), static_cast<long>(last_touch_y));
   }
   touch_was_pressed = touch.isPressed();
@@ -204,7 +205,7 @@ void loop()
     float ay = 0;
     float az = 0;
     if (M5.Imu.getAccel(&ax, &ay, &az)) {
-      std::printf("[IMU] accel x=%.3f y=%.3f z=%.3f\n", ax, ay, az);
+      Serial.printf("[IMU] accel x=%.3f y=%.3f z=%.3f\n", ax, ay, az);
     }
   }
 

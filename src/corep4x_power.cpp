@@ -56,12 +56,23 @@ const char* chargingName(m5::Power_Class::is_charging_t charging) {
 
 const char* powerSourceName(m5::M5PM1_Class::pwr_src_t source) {
   switch (source) {
+    case m5::M5PM1_Class::none:
+      return "none";
     case m5::M5PM1_Class::vin:
       return "VIN";
     case m5::M5PM1_Class::vinout:
       return "VIN output";
     case m5::M5PM1_Class::battery:
       return "battery";
+    case m5::M5PM1_Class::vin | m5::M5PM1_Class::vinout:
+      return "VIN + output";
+    case m5::M5PM1_Class::vin | m5::M5PM1_Class::battery:
+      return "VIN + battery";
+    case m5::M5PM1_Class::vinout | m5::M5PM1_Class::battery:
+      return "output + battery";
+    case m5::M5PM1_Class::vin | m5::M5PM1_Class::vinout |
+        m5::M5PM1_Class::battery:
+      return "VIN + output + battery";
     default:
       return "unknown";
   }
@@ -234,7 +245,7 @@ void drawPowerValues() {
   drawMetricValue(left_x, first_value_y + row_height * 0, column_width, board);
   drawMetricValue(left_x, first_value_y + row_height * 1, column_width, "M5PM1");
   drawMetricValue(left_x, first_value_y + row_height * 2, column_width,
-                  powerSourceName(source), source == m5::M5PM1_Class::unknown ? kWarning : kText);
+                  powerSourceName(source), source == m5::M5PM1_Class::none ? kWarning : kText);
   drawMetricValue(left_x, first_value_y + row_height * 3, column_width, vbus,
                   vbus_mv > 0 ? kGood : kWarning);
   drawMetricValue(left_x, first_value_y + row_height * 4, column_width, battery,
@@ -311,6 +322,7 @@ void toggleCharge() {
 
 void setup() {
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
   auto cfg = M5.config();
   cfg.internal_mic = false;
   cfg.internal_spk = false;

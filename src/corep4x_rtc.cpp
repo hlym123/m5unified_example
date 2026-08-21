@@ -1,5 +1,6 @@
 #include <M5Unified.h>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 
 namespace {
@@ -29,6 +30,7 @@ int s_minute = 0;
 int s_second = 0;
 bool s_editing = false;
 bool s_rtc_ok = false;
+bool s_time_valid = false;
 bool s_volt_low = false;
 int s_drawn_hour = -1;
 int s_drawn_minute = -1;
@@ -49,13 +51,15 @@ void setStatus(const char* status) {
 bool readRtc() {
   if (!M5.Rtc.isEnabled()) {
     s_rtc_ok = false;
+    s_time_valid = false;
     s_volt_low = false;
     return false;
   }
 
+  s_rtc_ok = true;
   m5::rtc_datetime_t dt;
   if (!M5.Rtc.getDateTime(&dt)) {
-    s_rtc_ok = false;
+    s_time_valid = false;
     s_volt_low = M5.Rtc.getVoltLow();
     return false;
   }
@@ -69,8 +73,58 @@ bool readRtc() {
   s_live_time.tm_min = dt.time.minutes;
   s_live_time.tm_sec = dt.time.seconds;
   s_live_time.tm_isdst = 0;
-  s_rtc_ok = true;
+  s_time_valid = true;
   s_volt_low = M5.Rtc.getVoltLow();
+  return true;
+}
+
+bool getBuildTime(tm& value) {
+  char month_name[4] = {};
+  int day = 0;
+  int year = 0;
+  int hour = 0;
+  int minute = 0;
+  int second = 0;
+  if (std::sscanf(__DATE__, "%3s %d %d", month_name, &day, &year) != 3 ||
+      std::sscanf(__TIME__, "%d:%d:%d", &hour, &minute, &second) != 3) {
+    return false;
+  }
+
+  static constexpr const char* kMonthNames[] = {
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  int month = -1;
+  for (int i = 0; i < 12; ++i) {
+    if (std::strncmp(month_name, kMonthNames[i], 3) == 0) {
+      month = i;
+      break;
+    }
+  }
+  if (month < 0) return false;
+
+  value = {};
+  value.tm_year = year - 1900;
+  value.tm_mon = month;
+  value.tm_mday = day;
+  value.tm_hour = hour;
+  value.tm_min = minute;
+  value.tm_sec = second;
+  value.tm_isdst = -1;
+  return std::mktime(&value) != static_cast<time_t>(-1);
+}
+
+bool initializeRtcFromBuildTime() {
+  tm build_time = {};
+  if (!s_rtc_ok || !getBuildTime(build_time)) return false;
+
+  M5.Rtc.setDateTime(&build_time);
+  M5.delay(20);
+  if (!readRtc()) return false;
+
+  setStatus("Initialized from build");
+  Serial.printf("[RTC] initialized from build time %04d-%02d-%02d %02d:%02d:%02d\n",
+                build_time.tm_year + 1900, build_time.tm_mon + 1, build_time.tm_mday,
+                build_time.tm_hour, build_time.tm_min, build_time.tm_sec);
   return true;
 }
 
@@ -108,9 +162,12 @@ void drawDate(bool force = false) {
   char line[32];
   M5.Display.setTextDatum(top_center);
   M5.Display.setFont(&fonts::Font4);
-  if (s_rtc_ok) {
+  if (s_rtc_ok && s_time_valid) {
     std::snprintf(line, sizeof(line), "%04d-%02d-%02d", year, month, day);
     M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  } else if (s_rtc_ok) {
+    std::snprintf(line, sizeof(line), "RTC TIME INVALID");
+    M5.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
   } else {
     std::snprintf(line, sizeof(line), "RTC NOT FOUND");
     M5.Display.setTextColor(TFT_RED, TFT_BLACK);
@@ -128,7 +185,10 @@ void drawStatus() {
   M5.Display.startWrite();
   M5.Display.setTextDatum(top_center);
   M5.Display.setFont(&fonts::Font2);
-  M5.Display.setTextColor(s_volt_low ? TFT_YELLOW : TFT_GREEN, TFT_BLACK);
+  const uint16_t color = !s_rtc_ok ? TFT_RED
+                         : (s_volt_low || !s_time_valid) ? TFT_YELLOW
+                                                        : TFT_GREEN;
+  M5.Display.setTextColor(color, TFT_BLACK);
   M5.Display.setTextPadding(M5.Display.width() - 32);
   M5.Display.drawString(s_volt_low ? "RTC VOLTAGE LOW" : s_status, M5.Display.width() / 2, 300);
   M5.Display.setTextPadding(0);
@@ -209,7 +269,7 @@ void drawEditScreen() {
 
 void beginEdit() {
   if (!readRtc()) {
-    setStatus("RTC not found");
+    setStatus(s_rtc_ok ? "RTC time invalid" : "RTC not found");
     drawStatus();
     return;
   }
@@ -228,9 +288,9 @@ void cancelEdit() {
 
 void saveEditTime() {
   if (!readRtc()) {
-    setStatus("RTC not found");
+    setStatus(s_rtc_ok ? "RTC time invalid" : "RTC not found");
     drawLiveScreen();
-    Serial.println("[RTC] save failed: rtc not found");
+    Serial.printf("[RTC] save failed: %s\n", s_rtc_ok ? "time invalid" : "rtc not found");
     return;
   }
 
@@ -283,8 +343,8 @@ void handleTouch(int16_t x, int16_t y) {
 }
 
 void logRtc() {
-  Serial.printf("[RTC] enabled=%d ok=%d volt_low=%d time=%04d-%02d-%02d %02d:%02d:%02d mode=%s\n",
-                M5.Rtc.isEnabled(), s_rtc_ok, s_volt_low,
+  Serial.printf("[RTC] enabled=%d ok=%d time_valid=%d volt_low=%d time=%04d-%02d-%02d %02d:%02d:%02d mode=%s\n",
+                M5.Rtc.isEnabled(), s_rtc_ok, s_time_valid, s_volt_low,
                 s_live_time.tm_year + 1900, s_live_time.tm_mon + 1, s_live_time.tm_mday,
                 s_live_time.tm_hour, s_live_time.tm_min, s_live_time.tm_sec,
                 s_editing ? "EDIT" : "LIVE");
@@ -293,13 +353,20 @@ void logRtc() {
 
 void setup() {
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
   auto cfg = M5.config();
   cfg.internal_rtc = true;
   M5.begin(cfg);
   M5.Display.setRotation(0);
   M5.Display.setTextSize(1);
 
-  readRtc();
+  const bool rtc_time_valid = readRtc();
+  if (!rtc_time_valid && s_rtc_ok && !initializeRtcFromBuildTime()) {
+    setStatus("RTC time invalid");
+    Serial.println("[RTC] initialization from build time failed");
+  } else if (!s_rtc_ok) {
+    setStatus("RTC not found");
+  }
   copyLiveTime();
   drawLiveScreen();
   logRtc();

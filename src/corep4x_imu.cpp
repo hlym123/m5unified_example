@@ -67,6 +67,7 @@ void drawNotFound() {
 
 void setup() {
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
   auto cfg = M5.config();
   cfg.internal_imu = true;
   cfg.internal_mic = false;

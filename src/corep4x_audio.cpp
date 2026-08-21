@@ -339,6 +339,7 @@ void handleTouch(int16_t x, int16_t y) {
 
 void setup() {
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
   auto cfg = M5.config();
   cfg.internal_mic = true;
   cfg.internal_spk = true;

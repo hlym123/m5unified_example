@@ -70,7 +70,6 @@ bool initSpeakerPath() {
   speaker_cfg.pin_ws = GPIO_NUM_4;
   speaker_cfg.pin_data_out = GPIO_NUM_3;
   speaker_cfg.sample_rate = 24000;
-  speaker_cfg.mclk_multiple = 256;
   speaker_cfg.i2s_port = I2S_NUM_0;
   speaker_cfg.magnification = 4;
   speaker_cfg.stereo = true;
@@ -171,6 +170,7 @@ void stopTone() {
 
 void setup() {
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
   auto cfg = M5.config();
   cfg.internal_mic = false;
   cfg.internal_spk = false;

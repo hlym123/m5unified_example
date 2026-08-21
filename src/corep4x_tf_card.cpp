@@ -1,6 +1,9 @@
 #include <M5Unified.h>
-#include <SD.h>
-#include <SPI.h>
+
+#include <driver/spi_master.h>
+#include <esp_err.h>
+#include <esp_vfs_fat.h>
+#include <sdmmc_cmd.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -19,26 +22,19 @@ constexpr uint8_t kM5Ioe1I2cConfigRegister = 0x23;
 constexpr uint8_t kM5Ioe1GpioModeHighRegister = 0x14;
 constexpr uint8_t kM5Ioe1GpioModeLowRegister = 0x04;
 constexpr uint8_t kM5Ioe1GpioOutputHighRegister = 0x06;
+constexpr uint8_t kM5Ioe1GpioInputHighRegister = 0x08;
+constexpr uint8_t kM5Ioe1GpioPullupHighRegister = 0x0A;
+constexpr uint8_t kM5Ioe1GpioPulldownHighRegister = 0x0C;
 constexpr uint8_t kShared3v3Mask = 1U << 3;  // M5IOE1_G12
+constexpr uint8_t kCardDetectMask = 1U << 4;  // M5IOE1_G13, active low
 constexpr uint32_t kM5Ioe1Frequency = 100000;
 
-constexpr char kTestPath[] = "/corep4x_tf_test.txt";
+constexpr char kMountPoint[] = "/sdcard";
+constexpr char kTestPath[] = "/sdcard/corep4x_tf_test.txt";
 constexpr char kTestPayload[] = "M5Stack CoreP4X TF card read/write test\n";
 
-SPIClass s_tf_spi(FSPI);
-
-const char* cardTypeName(uint8_t type) {
-  switch (type) {
-    case CARD_MMC:
-      return "MMC";
-    case CARD_SD:
-      return "SDSC";
-    case CARD_SDHC:
-      return "SDHC/SDXC";
-    default:
-      return "UNKNOWN";
-  }
-}
+bool s_test_passed = false;
+uint32_t s_next_retry_ms = 0;
 
 void drawStatus(const char* result, uint32_t color, const char* detail1,
                 const char* detail2) {
@@ -70,11 +66,35 @@ bool enableShared3v3() {
                        kShared3v3Mask, kM5Ioe1Frequency) && ok;
   ok = M5.In_I2C.bitOn(kM5Ioe1Address, kM5Ioe1GpioOutputHighRegister,
                        kShared3v3Mask, kM5Ioe1Frequency) && ok;
-  M5.delay(20);
+  M5.delay(300);
 
   const uint8_t output = M5.In_I2C.readRegister8(
       kM5Ioe1Address, kM5Ioe1GpioOutputHighRegister, kM5Ioe1Frequency);
   return ok && (output & kShared3v3Mask);
+}
+
+bool cardInserted(bool* config_ok, uint8_t* input_value) {
+  bool ok = M5.In_I2C.bitOff(kM5Ioe1Address, kM5Ioe1GpioModeLowRegister,
+                             kCardDetectMask, kM5Ioe1Frequency);
+  ok = M5.In_I2C.bitOff(kM5Ioe1Address, kM5Ioe1GpioPulldownHighRegister,
+                        kCardDetectMask, kM5Ioe1Frequency) && ok;
+  ok = M5.In_I2C.bitOn(kM5Ioe1Address, kM5Ioe1GpioPullupHighRegister,
+                       kCardDetectMask, kM5Ioe1Frequency) && ok;
+  M5.delay(20);
+
+  *input_value = M5.In_I2C.readRegister8(
+      kM5Ioe1Address, kM5Ioe1GpioInputHighRegister, kM5Ioe1Frequency);
+  *config_ok = ok;
+  return (*input_value & kCardDetectMask) == 0;
+}
+
+void cleanupSd(sdmmc_card_t* card, bool bus_initialized) {
+  if (card != nullptr) {
+    esp_vfs_fat_sdcard_unmount(kMountPoint, card);
+  }
+  if (bus_initialized) {
+    spi_bus_free(SPI3_HOST);
+  }
 }
 
 bool runTfCardTest() {
@@ -89,45 +109,77 @@ bool runTfCardTest() {
     return false;
   }
 
-  pinMode(kTfCsPin, OUTPUT);
-  digitalWrite(kTfCsPin, HIGH);
-  s_tf_spi.begin(kTfClockPin, kTfMisoPin, kTfMosiPin, kTfCsPin);
-  if (!SD.begin(kTfCsPin, s_tf_spi, kTfFrequency)) {
-    Serial.println("[TF] mount=FAIL");
-    drawStatus("FAIL", TFT_RED, "TF card mount failed", "Check card insertion");
-    s_tf_spi.end();
+  bool detect_config_ok = false;
+  uint8_t detect_input = 0xFF;
+  const bool card_inserted = cardInserted(&detect_config_ok, &detect_input);
+  Serial.printf("[TF] detect M5IOE1_G13=%s raw=0x%02X config=%s\n",
+                card_inserted ? "LOW/PRESENT" : "HIGH/NOT_INSERTED",
+                detect_input, detect_config_ok ? "PASS" : "FAIL");
+  if (!detect_config_ok || !card_inserted) {
+    drawStatus("FAIL", TFT_RED,
+               detect_config_ok ? "TF card not detected" : "Card detect config failed",
+               "M5IOE1_G13 must be LOW");
     return false;
   }
 
-  const uint8_t card_type = SD.cardType();
-  if (card_type == CARD_NONE) {
-    Serial.println("[TF] card=FAIL type=NONE");
-    drawStatus("FAIL", TFT_RED, "No TF card detected", "Mount returned no card");
-    SD.end();
-    s_tf_spi.end();
+  spi_bus_config_t bus_config = {};
+  bus_config.mosi_io_num = kTfMosiPin;
+  bus_config.miso_io_num = kTfMisoPin;
+  bus_config.sclk_io_num = kTfClockPin;
+  bus_config.quadwp_io_num = -1;
+  bus_config.quadhd_io_num = -1;
+  bus_config.max_transfer_sz = 2048;
+
+  esp_err_t result = spi_bus_initialize(SPI3_HOST, &bus_config, SPI_DMA_CH_AUTO);
+  if (result != ESP_OK) {
+    Serial.printf("[TF] spi_bus_initialize=FAIL error=%s (0x%X)\n",
+                  esp_err_to_name(result), static_cast<unsigned>(result));
+    drawStatus("FAIL", TFT_RED, "SPI3 init failed", esp_err_to_name(result));
     return false;
   }
 
-  const uint64_t card_size_mib = SD.cardSize() / (1024ULL * 1024ULL);
-  const uint64_t total_mib = SD.totalBytes() / (1024ULL * 1024ULL);
-  const uint64_t used_mib = SD.usedBytes() / (1024ULL * 1024ULL);
-  Serial.printf("[TF] mount=PASS type=%s card=%lluMiB total=%lluMiB used=%lluMiB\n",
-                cardTypeName(card_type), card_size_mib, total_mib, used_mib);
+  sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+  host.slot = SPI3_HOST;
+  host.max_freq_khz = kTfFrequency / 1000;
 
-  SD.remove(kTestPath);
-  File file = SD.open(kTestPath, FILE_WRITE);
+  sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+  slot_config.gpio_cs = static_cast<gpio_num_t>(kTfCsPin);
+  slot_config.host_id = SPI3_HOST;
+
+  esp_vfs_fat_sdmmc_mount_config_t mount_config = {};
+  mount_config.format_if_mount_failed = false;
+  mount_config.max_files = 5;
+  mount_config.allocation_unit_size = 64 * 1024;
+
+  sdmmc_card_t* card = nullptr;
+  result = esp_vfs_fat_sdspi_mount(kMountPoint, &host, &slot_config,
+                                   &mount_config, &card);
+  if (result != ESP_OK) {
+    Serial.printf("[TF] mount=FAIL error=%s (0x%X)\n",
+                  esp_err_to_name(result), static_cast<unsigned>(result));
+    drawStatus("FAIL", TFT_RED, "TF card mount failed", esp_err_to_name(result));
+    cleanupSd(nullptr, true);
+    return false;
+  }
+
+  const uint64_t card_size_mib =
+      static_cast<uint64_t>(card->csd.capacity) * card->csd.sector_size
+      / (1024ULL * 1024ULL);
+  Serial.printf("[TF] mount=PASS name=%s card=%lluMiB max_freq=%ukHz\n",
+                card->cid.name, card_size_mib, host.max_freq_khz);
+
+  std::remove(kTestPath);
+  FILE* file = std::fopen(kTestPath, "wb");
   if (!file) {
     Serial.printf("[TF] write=FAIL path=%s open failed\n", kTestPath);
     drawStatus("FAIL", TFT_RED, "Open for write failed", kTestPath);
-    SD.end();
-    s_tf_spi.end();
+    cleanupSd(card, true);
     return false;
   }
 
   const size_t expected_length = std::strlen(kTestPayload);
-  const size_t written = file.write(
-      reinterpret_cast<const uint8_t*>(kTestPayload), expected_length);
-  file.close();
+  const size_t written = std::fwrite(kTestPayload, 1, expected_length, file);
+  std::fclose(file);
   const bool write_ok = written == expected_length;
   Serial.printf("[TF] write=%s path=%s bytes=%u/%u\n",
                 write_ok ? "PASS" : "FAIL", kTestPath,
@@ -135,12 +187,10 @@ bool runTfCardTest() {
                 static_cast<unsigned>(expected_length));
 
   char buffer[sizeof(kTestPayload)] = {};
-  file = SD.open(kTestPath, FILE_READ);
-  const size_t read = file ? file.read(reinterpret_cast<uint8_t*>(buffer),
-                                       sizeof(buffer) - 1)
-                           : 0;
+  file = std::fopen(kTestPath, "rb");
+  const size_t read = file ? std::fread(buffer, 1, sizeof(buffer) - 1, file) : 0;
   if (file) {
-    file.close();
+    std::fclose(file);
   }
   const bool read_ok = read == expected_length;
   const bool content_ok = read_ok && std::memcmp(buffer, kTestPayload,
@@ -150,27 +200,27 @@ bool runTfCardTest() {
                 static_cast<unsigned>(expected_length),
                 content_ok ? "PASS" : "FAIL");
 
-  const bool cleanup_ok = SD.remove(kTestPath);
+  const bool cleanup_ok = std::remove(kTestPath) == 0;
   Serial.printf("[TF] cleanup=%s path=%s\n",
                 cleanup_ok ? "PASS" : "FAIL", kTestPath);
 
-  const bool result = write_ok && content_ok && cleanup_ok;
+  const bool test_result = write_ok && content_ok && cleanup_ok;
   char card_info[64];
   std::snprintf(card_info, sizeof(card_info), "%s / %llu MiB",
-                cardTypeName(card_type), card_size_mib);
-  drawStatus(result ? "PASS" : "FAIL", result ? TFT_GREEN : TFT_RED,
-             result ? "Write and read verified" : "Data verification failed",
+                card->cid.name, card_size_mib);
+  drawStatus(test_result ? "PASS" : "FAIL", test_result ? TFT_GREEN : TFT_RED,
+             test_result ? "Write and read verified" : "Data verification failed",
              card_info);
-  Serial.printf("[TF] RESULT=%s\n", result ? "PASS" : "FAIL");
-  SD.end();
-  s_tf_spi.end();
-  return result;
+  Serial.printf("[TF] RESULT=%s\n", test_result ? "PASS" : "FAIL");
+  cleanupSd(card, true);
+  return test_result;
 }
 
 }  // namespace
 
 void setup() {
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);
   auto cfg = M5.config();
   cfg.internal_mic = false;
   cfg.internal_spk = false;
@@ -189,10 +239,17 @@ void setup() {
     return;
   }
   drawStatus("TEST", TFT_YELLOW, "Testing TF card", "Please wait");
-  runTfCardTest();
+  s_test_passed = runTfCardTest();
+  s_next_retry_ms = millis() + 5000;
 }
 
 void loop() {
   M5.update();
+  const uint32_t now = millis();
+  if (!s_test_passed && static_cast<int32_t>(now - s_next_retry_ms) >= 0) {
+    Serial.println("[TF] retrying failed test");
+    s_test_passed = runTfCardTest();
+    s_next_retry_ms = millis() + 5000;
+  }
   M5.delay(20);
 }
