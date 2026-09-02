@@ -26,7 +26,7 @@ static void drawColorScreen(size_t color_index, uint8_t brightness, uint8_t rota
     char status[48];
     snprintf(status, sizeof(status), "R%u  B%u", rotation, brightness);
     M5.Lcd.drawString(status, width / 2, height / 2 + 4);
-    M5.Lcd.drawString("A/B:color C:rotate", width / 2, height / 2 + 28);
+    M5.Lcd.drawString("A:color B:bright C:rotate", width / 2, height / 2 + 28);
 }
 
 void setup(void)
@@ -54,23 +54,20 @@ void loop(void)
     static uint8_t rotation = 0;
 
     if (M5.BtnA.wasPressed()) {
-        color_index = (color_index + kColorCount - 1) % kColorCount;
+        color_index = (color_index + 1) % kColorCount;
+        Serial.printf("display color=%s\n", kColorNames[color_index]);
         drawColorScreen(color_index, kBrightnessLevels[brightness_index], rotation);
     }
     if (M5.BtnB.wasPressed()) {
-        color_index = (color_index + 1) % kColorCount;
-        drawColorScreen(color_index, kBrightnessLevels[brightness_index], rotation);
-    }
-    if (M5.BtnC.wasClicked()) {
-        rotation = (rotation + 1) % kRotationCount;
-        M5.Lcd.setRotation(rotation);
-        Serial.printf("display rotation=%u size=%dx%d\n", rotation, M5.Lcd.width(), M5.Lcd.height());
-        drawColorScreen(color_index, kBrightnessLevels[brightness_index], rotation);
-    }
-    if (M5.BtnC.wasHold()) {
         brightness_index = (brightness_index + 1) % kBrightnessCount;
         M5.Lcd.setBrightness(kBrightnessLevels[brightness_index]);
         Serial.printf("display brightness=%u\n", M5.Lcd.getBrightness());
         drawColorScreen(color_index, M5.Lcd.getBrightness(), rotation);
+    }
+    if (M5.BtnC.wasPressed()) {
+        rotation = (rotation + 1) % kRotationCount;
+        M5.Lcd.setRotation(rotation);
+        Serial.printf("display rotation=%u size=%dx%d\n", rotation, M5.Lcd.width(), M5.Lcd.height());
+        drawColorScreen(color_index, kBrightnessLevels[brightness_index], rotation);
     }
 }
