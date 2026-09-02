@@ -26,7 +26,8 @@ static void drawColorScreen(size_t color_index, uint8_t brightness, uint8_t rota
     char status[48];
     snprintf(status, sizeof(status), "R%u  B%u", rotation, brightness);
     M5.Lcd.drawString(status, width / 2, height / 2 + 4);
-    M5.Lcd.drawString("A:color B:bright C:rotate", width / 2, height / 2 + 28);
+    M5.Lcd.drawString("A:color B:bright", width / 2, height / 2 + 22);
+    M5.Lcd.drawString("C:rotate", width / 2, height / 2 + 42);
 }
 
 void setup(void)
