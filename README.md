@@ -62,6 +62,29 @@ m5unified_example/
 
 ## CoreP4X 调试记录
 
+### LSM6DS3TR-C IMU
+
+`m5stack-corep4x-imu` 环境显示六轴数据，每秒输出温度及本周期读取的新加速度/陀螺仪样本数。
+需要使用包含 `m5::imu_lsm6ds3trc` 支持的 M5Unified；启动日志会输出实际检测的类型和 I2C 地址。
+
+```bash
+pio run -e m5stack-corep4x-imu
+pio run -e m5stack-corep4x-imu -t upload --upload-port <port>
+pio device monitor --port <port> --baud 115200
+```
+
+LSM6DS3TR-C 的 WHO_AM_I 应为 `0x6A`，I2C 地址为 `0x6A` 或 `0x6B`。
+默认配置为 104 Hz、加速度 ±8 g、陀螺仪 ±2000 dps；配置寄存器日志应为
+`ctrl1_xl=0x4C ctrl2_g=0x4C ctrl3_c=0x44`。温度按 `25 + raw / 256` 换算。
+传感器通常每秒产生约 104 组新六轴样本，日志中的 `new` 计数可用于排除数据未刷新的情况。
+
+CoreP4X 上的加速度和陀螺仪使用相同轴映射：相对芯片原始轴，
+输出为 `X=-Y、Y=-X、Z=-Z`。初始化会等待陀螺仪启动稳定并丢弃最初的样本；
+启动时请保持设备静止，避免影响 M5Unified 的初始零偏校准。
+
+轴向验收时，依次将屏幕朝上、朝下以及四条边朝上，静置检查对应轴约为 ±1 g，
+其他两轴接近 0；绕单轴转动检查陀螺仪对应轴及正负方向。
+
 ### USB 已连接但未打开串口时触摸卡顿
 
 - 现象：USB 已连接并枚举，但上位机未打开串口时，连续触摸后画点和界面更新会出现卡顿。打开串口监视器或拔掉 USB 后不复现。
